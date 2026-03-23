@@ -8,18 +8,24 @@ import platform
 """
 코드 설명
 1. 특정 이미지 파일을 imread로 읽어와서 BGR 형식의 3채널 이미지로 저장한다.
-2. opencv와 수작업 변환시 각각의 시간차를 측정하기 위해 test wrapper 함수에 각각의 함수와 이미지를 전달한다.
+2. opencv와 수작업 변환시 각각의 시간차를 측정하기 위해 test_for_report2 wrapper 함수에 각각의 함수와 이미지를 전달한다.
 3. 반환된 결과값(시간, Y709, 복원된 이미지)을 각각 변수에 저장한다.
 4. 측정된 시간값을 출력한다.
 5. 변환된 이미지들을 격자의 형태로 적절하게 출력한다.
 """
 
-#시간 측정용 함수
-def test(func, img):
+#시간 측정용 함수(for report2)
+def test_for_report2(func, img):
     start_time = time.time()
     y, img_restored = func(img)
     end_time = time.time()
     return (end_time - start_time, y, img_restored)
+
+def test_for_report3(func, img1, img2):
+    start_time = time.time()
+    psnr_value = func(img1, img2)
+    end_time = time.time()
+    return (end_time - start_time, psnr_value)
 
 #opencv 변환용 함수
 def opencv_function(img):
@@ -111,13 +117,9 @@ def show_imgs_by_grid_single_window(imgs,titles,tile_size=(420, 300),window_titl
 def _is_wsl() -> bool:
     return bool(os.environ.get('WSL_DISTRO_NAME') or os.environ.get('WSL_INTEROP') or 'microsoft' in platform.release().lower())
 
-#오차율 측 함수(opencv)
+#오차율 측정 함수(opencv)
 def psnr_opencv(img1, img2):
-    mse = np.mean((img1.astype(np.float64) - img2.astype(np.float64)) ** 2)
-    if mse == 0:
-        return float('inf')
-    max_pixel = 255.0
-    psnr_value = 20 * np.log10(max_pixel / np.sqrt(mse))
+    psnr_value = cv.PSNR(img1, img2)
     return psnr_value
 
 #오차율 측 함수(수작업)
@@ -137,16 +139,24 @@ if img is None:
     raise FileNotFoundError(f"Failed to read image: {imgfile}")
 
 #변환 및 시간 측정
-opencv_time, opencv_Y709, opencv_img_restored = test(opencv_function, img)
-mannual_time, mannual_Y709, mannual_img_restored = test(mannual_function, img)
+opencv_time, opencv_Y709, opencv_img_restored = test_for_report2(opencv_function, img)
+mannual_time, mannual_Y709, mannual_img_restored = test_for_report2(mannual_function, img)
 
-#시간 출력
-print(f"opencv_time : {opencv_time:.4f}")
-print(f"manual_time : {mannual_time:.4f}")
+# #시간 출력
+# print(f"opencv_time : {opencv_time:.4f}")
+# print(f"manual_time : {mannual_time:.4f}")
 
-#변환 이미지 출력
-imgs = [img, opencv_Y709, opencv_img_restored, mannual_Y709, mannual_img_restored]
-titles = ['original', 'grayscale_opencv', 'OpenCV Restored', 'grayscale_manual', 'Manual Restored']
+# #변환 이미지 출력
+# imgs = [img, opencv_Y709, opencv_img_restored, mannual_Y709, mannual_img_restored]
+# titles = ['original', 'grayscale_opencv', 'OpenCV Restored', 'grayscale_manual', 'Manual Restored']
+
+# # WSL에서는 창 위치 배치가 OS에 따라 달라질 수 있어, 단일 창 그리드로 표시
+# if _is_wsl():
+#     show_imgs_by_grid_single_window(imgs, titles, tile_size=(420, 300), window_title='grid')
+# else:
+#     show_imgs_by_grid(imgs, titles)
+
+#오차율 계산 및 시간 출력
 
 # PSNR 계산
 psnr_opencv_value = psnr_opencv(img, opencv_img_restored)
@@ -155,8 +165,3 @@ psnr_mannual_value = psnr_mannual(img, mannual_img_restored)
 print(f"PSNR (OpenCV): {psnr_opencv_value:.4f}")
 print(f"PSNR (Manual): {psnr_mannual_value:.4f}")
 
-# WSL에서는 창 위치 배치가 OS에 따라 달라질 수 있어, 단일 창 그리드로 표시
-if _is_wsl():
-    show_imgs_by_grid_single_window(imgs, titles, tile_size=(420, 300), window_title='grid')
-else:
-    show_imgs_by_grid(imgs, titles)

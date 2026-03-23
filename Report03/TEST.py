@@ -21,6 +21,7 @@ def test_for_report2(func, img):
     end_time = time.time()
     return (end_time - start_time, y, img_restored)
 
+#시간 측정용 함수(for report3)
 def test_for_report3(func, img1, img2):
     start_time = time.time()
     psnr_value = func(img1, img2)
@@ -57,64 +58,7 @@ def mannual_function(img):
     img_restored= cv.merge((B, G, R))
     return (return_Y709, img_restored)
 
-#변환된 이미지들을 적절하게 보여주는 (for windows) 함수
-def show_imgs_by_grid(imgs, titles, window_size=(420, 300), start_pos=(0, 0)):
-    slots = [(0, 0), (0, 1), (0, 2), (1, 1), (1, 2)]
-    w, h = window_size
-    sx, sy = start_pos
 
-    for (row, col), img, title in zip(slots, imgs, titles):
-        cv.namedWindow(title, cv.WINDOW_NORMAL)
-        cv.imshow(title, img)
-
-        cv.resizeWindow(title, w, h)
-        cv.moveWindow(title, sx + (col * w), sy + (row * h))
-
-        cv.waitKey(1)
-
-    cv.waitKey(0)
-    cv.destroyAllWindows()
-
-#show_imgs_by_grid 함수에 대한 helper 함수
-def _to_bgr(img: np.ndarray) -> np.ndarray:
-    if img is None:
-        return img
-    if img.ndim == 2:
-        return cv.cvtColor(img, cv.COLOR_GRAY2BGR)
-    return img
-
-#변환된 이미지들을 적절하게 보여주는 (for WSL) 함수
-def show_imgs_by_grid_single_window(imgs,titles,tile_size=(420, 300),window_title='grid'):
-    slots = [(0, 0), (0, 1), (0, 2), (1, 1), (1, 2)]
-    cols, rows = 3, 2
-    tile_w, tile_h = tile_size
-
-    canvas = np.zeros((rows * tile_h, cols * tile_w, 3), dtype=np.uint8)
-
-    for (row, col), img, title in zip(slots, imgs, titles):
-        tile = _to_bgr(img)
-        tile = cv.resize(tile, (tile_w, tile_h), interpolation=cv.INTER_AREA)
-        x0, y0 = col * tile_w, row * tile_h
-        canvas[y0:y0 + tile_h, x0:x0 + tile_w] = tile
-
-        cv.putText(
-            canvas,
-            str(title),
-            (x0 + 10, y0 + 30),
-            cv.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (255, 255, 255),
-            2,
-            cv.LINE_AA,
-        )
-
-    cv.namedWindow(window_title, cv.WINDOW_NORMAL)
-    cv.imshow(window_title, canvas)
-    cv.waitKey(0)
-    cv.destroyAllWindows()
-
-# WSL 환경 감지 함수
-def _is_wsl() -> bool:
     return bool(os.environ.get('WSL_DISTRO_NAME') or os.environ.get('WSL_INTEROP') or 'microsoft' in platform.release().lower())
 
 #오차율 측정 함수(opencv)
@@ -122,7 +66,7 @@ def psnr_opencv(img1, img2):
     psnr_value = cv.PSNR(img1, img2)
     return psnr_value
 
-#오차율 측 함수(수작업)
+#오차율 측정 함수(수작업)
 def psnr_mannual(img1, img2):
     mse = np.mean((img1.astype(np.float64) - img2.astype(np.float64)) ** 2)
     if mse == 0:
@@ -138,30 +82,17 @@ img = cv.imread(str(imgfile), cv.IMREAD_COLOR)
 if img is None:
     raise FileNotFoundError(f"Failed to read image: {imgfile}")
 
-#변환 및 시간 측정
+#변환 및 복원
 opencv_time, opencv_Y709, opencv_img_restored = test_for_report2(opencv_function, img)
 mannual_time, mannual_Y709, mannual_img_restored = test_for_report2(mannual_function, img)
 
-# #시간 출력
-# print(f"opencv_time : {opencv_time:.4f}")
-# print(f"manual_time : {mannual_time:.4f}")
+#오차율 계산 및 시간 측정
+opencv_time, psnr_opencv_value = test_for_report3(psnr_opencv, img, opencv_img_restored)
+mannual_time, psnr_mannual_value = test_for_report3(psnr_mannual, img, mannual_img_restored)
 
-# #변환 이미지 출력
-# imgs = [img, opencv_Y709, opencv_img_restored, mannual_Y709, mannual_img_restored]
-# titles = ['original', 'grayscale_opencv', 'OpenCV Restored', 'grayscale_manual', 'Manual Restored']
-
-# # WSL에서는 창 위치 배치가 OS에 따라 달라질 수 있어, 단일 창 그리드로 표시
-# if _is_wsl():
-#     show_imgs_by_grid_single_window(imgs, titles, tile_size=(420, 300), window_title='grid')
-# else:
-#     show_imgs_by_grid(imgs, titles)
-
-#오차율 계산 및 시간 출력
-
-# PSNR 계산
-psnr_opencv_value = psnr_opencv(img, opencv_img_restored)
-psnr_mannual_value = psnr_mannual(img, opencv_img_restored)
-
+#값 출력
 print(f"PSNR (OpenCV): {psnr_opencv_value:.4f}")
 print(f"PSNR (Manual): {psnr_mannual_value:.4f}")
 
+print(f"Time (OpenCV): {opencv_time:.4f}")
+print(f"Time (Manual): {mannual_time:.4f}")

@@ -4,14 +4,14 @@ import time
 from pathlib import Path
 import os
 import platform
+import math
 
 """
 코드 설명
 1. 특정 이미지 파일을 imread로 읽어와서 BGR 형식의 3채널 이미지로 저장한다.
 2. opencv와 수작업 변환시 각각의 시간차를 측정하기 위해 test_for_report2 wrapper 함수에 각각의 함수와 이미지를 전달한다.
 3. 반환된 결과값(시간, Y709, 복원된 이미지)을 각각 변수에 저장한다.
-4. 측정된 시간값을 출력한다.
-5. 변환된 이미지들을 격자의 형태로 적절하게 출력한다.
+4. 반환된 결과값을 바탕으로 오차율(PSNR)을 계산하여 출력한다.
 """
 
 #시간 측정용 함수(for report2)
@@ -160,7 +160,7 @@ mannual_time, mannual_Y709, mannual_img_restored = test_for_report2(mannual_func
 
 # PSNR 계산
 psnr_opencv_value = psnr_opencv(img, opencv_img_restored)
-psnr_mannual_value = psnr_mannual(img, mannual_img_restored)
+psnr_mannual_value = psnr_mannual(img, opencv_img_restored)
 
 print(f"PSNR (OpenCV): {psnr_opencv_value:.4f}")
 print(f"PSNR (Manual): {psnr_mannual_value:.4f}")

@@ -34,10 +34,20 @@ def test_for_report4(func_restore, func_equalize, img):
     start_time = time.time()
     y, img_restored = func_restore(img)
     y_equalized = func_equalize(y)
-    img_equalized = img_restored.copy()
-    img_equalized[:, :, 0] = y_equalized
+    img_equalized = restoring_by_equalization(y_equalized, img)
     end_time = time.time()
     return (end_time - start_time, img_restored, img_equalized)
+
+#복원용 함수
+def restoring_by_equalization(y_equalized, img):
+    # cv.equalizeHist() 결과는 8비트 1채널이어야 하므로, 타입을 보장한다.
+    y_equalized = np.clip(y_equalized, 0, 255).astype(np.uint8)
+
+    # 원본(BGR)에서 YCrCb로 변환 후 Y(0번 채널)만 교체하고 다시 BGR로 복원
+    img_ycrcb = cv.cvtColor(img, cv.COLOR_BGR2YCrCb)
+    img_ycrcb[:, :, 0] = y_equalized
+    img_equalized = cv.cvtColor(img_ycrcb, cv.COLOR_YCrCb2BGR)
+    return img_equalized
 
 #opencv 변환용 함수
 def opencv_function_restoring(img):
@@ -68,9 +78,6 @@ def mannual_function_restoring(img):
 
     img_restored= cv.merge((B, G, R))
     return (return_Y709, img_restored)
-
-
-    return bool(os.environ.get('WSL_DISTRO_NAME') or os.environ.get('WSL_INTEROP') or 'microsoft' in platform.release().lower())
 
 #opencv histogram equalization 함수
 def opencv_equalize_histogram(y):

@@ -29,25 +29,46 @@ def test_for_report3(func, img1, img2):
     end_time = time.time()
     return (end_time - start_time, psnr_value)
 
-#시간 측정용 함수(for report2) **report2를 변형함**
-def test_for_report4(func_restore, func_equalize, img):
+# #시간 측정용 함수(for report4) **report2를 변형함**
+# def test_for_report4(func_restore, func_equalize, img):
+#     start_time = time.time()
+#     y, img_restored = func_restore(img)
+#     y_equalized = func_equalize(y)
+#     img_equalized = restoring_by_equalization(y_equalized, img)
+#     end_time = time.time()
+#     return (end_time - start_time, img_restored, img_equalized)
+
+#시간 측정용 함수(for report6) **report4를 변형함**
+def test_for_report6(func_restore, func_filter, img, repeat_count):
     start_time = time.time()
     y, img_restored = func_restore(img)
-    y_equalized = func_equalize(y)
-    img_equalized = restoring_by_equalization(y_equalized, img)
+    y_filtered = repeat_averaging_filter(func_filter, y, repeat_count)
+    img_filtered = restoring_by_filtering(y_filtered, img)
     end_time = time.time()
-    return (end_time - start_time, img_restored, img_equalized)
+    return (end_time - start_time, img_restored, img_filtered)
+
+#평균 필터 함수
+def averaging_filter(img, kernel_size=3):
+    kernel = np.ones((kernel_size, kernel_size), dtype=np.float32) / (kernel_size * kernel_size)
+    filtered_img = cv.filter2D(img, -1, kernel)
+    return filtered_img
+
+#평균 필터를 여러 번 적용하는 함수
+def repeat_averaging_filter(func_filter, img, repeat_count, kernel_size=3):
+    filtered_img = img.copy()
+    for _ in range(repeat_count):
+        filtered_img = func_filter(filtered_img, kernel_size)
+    return filtered_img
 
 #복원용 함수
-def restoring_by_equalization(y_equalized, img):
-    # cv.equalizeHist() 결과는 8비트 1채널이어야 하므로, 타입을 보장한다.
-    y_equalized = np.clip(y_equalized, 0, 255).astype(np.uint8)
+def restoring_by_filtering(y_filtered, img):
+    y_filtered = np.clip(y_filtered, 0, 255).astype(np.uint8)
 
     # 원본(BGR)에서 YCrCb로 변환 후 Y(0번 채널)만 교체하고 다시 BGR로 복원
     img_ycrcb = cv.cvtColor(img, cv.COLOR_BGR2YCrCb)
-    img_ycrcb[:, :, 0] = y_equalized
-    img_equalized = cv.cvtColor(img_ycrcb, cv.COLOR_YCrCb2BGR)
-    return img_equalized
+    img_ycrcb[:, :, 0] = y_filtered
+    img_filtered = cv.cvtColor(img_ycrcb, cv.COLOR_YCrCb2BGR)
+    return img_filtered
 
 #opencv 변환용 함수
 def opencv_function_restoring(img):
@@ -173,25 +194,23 @@ img = cv.imread(str(imgfile), cv.IMREAD_COLOR)
 if img is None:
     raise FileNotFoundError(f"Failed to read image: {imgfile}")
 
-#변환 및 복원
-opencv_time, opencv_img_restored, opencv_img_equalized = test_for_report4(opencv_function_restoring, opencv_equalize_histogram, img)
-mannual_time, mannual_img_restored, mannual_img_equalized = test_for_report4(mannual_function_restoring, mannual_equalize_histogram, img)
+repeat_counts = [1, 5, 10]
+results = []
 
-#오차율 계산 및 시간 측정
-_, psnr_opencv_value = test_for_report3(psnr_opencv, img, opencv_img_restored)
-_, psnr_opencv_value2 = test_for_report3(psnr_opencv, img, opencv_img_equalized)
-_, psnr_mannual_value = test_for_report3(psnr_opencv, img, mannual_img_equalized)
+#변환, filtering, 복원
+for repeat_count in repeat_counts:
+    elapsed_time, img_restored, img_filtered = test_for_report6(opencv_function_restoring, averaging_filter, img, repeat_count)
+    _, psnr_value = test_for_report3(psnr_opencv, img, img_filtered)
+    results.append((repeat_count, elapsed_time, img_restored, img_filtered, psnr_value))
 
 #값 출력
-print(f"PSNR(calculated by opencv) (restored(opencv)): {psnr_opencv_value:.4f}")
-print(f"PSNR(calculated by opencv) (restored(opencv) & equalized(opencv)): {psnr_opencv_value2:.4f}")
-print(f"PSNR(calculated by opencv) (restored(manual) & equalized(manual)): {psnr_mannual_value:.4f}")
-print(f"Time (OpenCV): {opencv_time:.4f}")
-print(f"Time (Manual): {mannual_time:.4f}")
+for repeat_count, elapsed_time, _, _, psnr_value in results:
+    print(f"PSNR(calculated by opencv) ({repeat_count} times filtering): {psnr_value:.4f}")
+    print(f"Time ({repeat_count} times filtering): {elapsed_time:.4f}")
 
 #이미지 출력
 show_imgs_by_grid_single_window(
-    [img, opencv_img_restored, opencv_img_equalized, mannual_img_restored, mannual_img_equalized],
-    ['Original', 'Restored (OpenCV)', 'Equalized (OpenCV)', 'Restored (Manual)', 'Equalized (Manual)']
+    [img] + [result[3] for result in results],
+    ['Original', '1 time', '5 times', '10 times'],
+    window_title='report06_result'
 )
-

@@ -155,11 +155,11 @@ def _to_bgr(img: np.ndarray) -> np.ndarray:
         return cv.cvtColor(img, cv.COLOR_GRAY2BGR)
     return img
 
-def show_imgs_by_grid_single_window(imgs,titles,tile_size=(420, 300),window_title='grid'):
-    slots = [(0, 0), (0, 1), (0, 2), (1, 1), (1, 2)]
-    cols, rows = 3, 2
+def show_imgs_by_grid_single_window(imgs, titles, tile_size=(420, 300), window_title='grid', grid=(2, 2)):
+    cols, rows = grid
     tile_w, tile_h = tile_size
 
+    slots = [(r, c) for r in range(rows) for c in range(cols)]
     canvas = np.zeros((rows * tile_h, cols * tile_w, 3), dtype=np.uint8)
 
     for (row, col), img, title in zip(slots, imgs, titles):

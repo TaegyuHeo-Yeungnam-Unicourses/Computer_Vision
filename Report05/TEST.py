@@ -205,8 +205,8 @@ for repeat_count in repeat_counts:
 
 #값 출력
 for repeat_count, elapsed_time, _, _, psnr_value in results:
-    print(f"PSNR(calculated by opencv) ({repeat_count} times filtering): {psnr_value:.4f}")
-    print(f"Time ({repeat_count} times filtering): {elapsed_time:.4f}")
+    print(f"PSNR implrement_{repeat_count} : {psnr_value:.4f}")
+    #print(f"Time ({repeat_count} times filtering): {elapsed_time:.4f}")
 
 #이미지 출력
 show_imgs_by_grid_single_window(

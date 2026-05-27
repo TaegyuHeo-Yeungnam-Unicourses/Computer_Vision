@@ -19,8 +19,8 @@ OUTPUT_DIR = BASE_DIR / "output"
 CANNY_OUTPUT_PATH = OUTPUT_DIR / "canny_edge_detection.mp4"
 HOUGH_OUTPUT_PATH = OUTPUT_DIR / "hough_line_detection.mp4"
 
-TOP_LINE_COUNT = 10
-LOWER_HALF_LINE_WEIGHT = 4.0
+TOP_LINE_COUNT = 4
+LOWER_HALF_LINE_WEIGHT = 10.0
 
 CANNY_LOW_THRESHOLD = 80
 CANNY_HIGH_THRESHOLD = 160
@@ -102,9 +102,9 @@ def detect_edges(frame):
 
 
 def draw_top_lane_lines(frame, edges):
-    """차선 각도에 맞는 상위 10개 직선을 원본 프레임 위에 그린다."""
+    """차선 각도에 맞는 상위 n개 직선을 원본 프레임 위에 그린다."""
     output = frame.copy()
-    lines = find_top_lane_lines(edges, frame.shape[0])
+    lines = find_top_lane_lines(edges, frame.shape[0], frame.shape[1])
 
     rank = 1
     for line in lines:
@@ -112,7 +112,7 @@ def draw_top_lane_lines(frame, edges):
         cv2.line(output, (x1, y1), (x2, y2), (0, 0, 255), 3)
         cv2.putText(
             output,
-            "#" + str(rank) + " " + str(round(score)),
+            "#" + str(rank), #+ " " + str(round(score),
             (x1, y1),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.55,
@@ -133,8 +133,8 @@ def draw_top_lane_lines(frame, edges):
     return output
 
 
-def find_top_lane_lines(edges, image_height):
-    """HoughLinesP 결과 중 차선처럼 보이는 직선 상위 10개를 반환한다."""
+def find_top_lane_lines(edges, image_height, image_width):
+    """HoughLinesP 결과 중 차선처럼 보이는 직선 상위 n개를 반환한다."""
     raw_lines = cv2.HoughLinesP(
         edges,
         rho=LINE_RHO,
@@ -156,8 +156,9 @@ def find_top_lane_lines(edges, image_height):
         y2 = int(y2)
 
         if is_lane_angle(x1, y1, x2, y2):
-            score = line_score(x1, y1, x2, y2, image_height)
-            lane_lines.append((score, x1, y1, x2, y2))
+            score = line_score(x1, y1, x2, y2, image_height, image_width)
+            if score > 0:  # 양수 score만 추가
+                lane_lines.append((score, x1, y1, x2, y2))
 
     lane_lines.sort(reverse=True)
     return lane_lines[:TOP_LINE_COUNT]
@@ -165,18 +166,28 @@ def find_top_lane_lines(edges, image_height):
 
 def is_lane_angle(x1, y1, x2, y2):
     """직선 각도가 차선처럼 보이는 대각선 범위인지 확인한다."""
+ 
     angle = abs(math.degrees(math.atan2(y2 - y1, x2 - x1)))
     if angle > 90.0:
         angle = 180.0 - angle
     return angle >= LANE_MIN_ABS_ANGLE and angle <= LANE_MAX_ABS_ANGLE
 
 
-def line_score(x1, y1, x2, y2, image_height):
-    """긴 직선과 화면 아래쪽 직선에 더 높은 점수를 준다."""
+def line_score(x1, y1, x2, y2, image_height, image_width):
+    """화면 아래쪽 직선과 화면 중앙에 가까운 직선에 높은 점수를 준다."""
     score = math.hypot(x2 - x1, y2 - y1)
-    middle_y = (y1 + y2) / 2.0
-    if middle_y >= image_height / 2.0:
-        score = score * LOWER_HALF_LINE_WEIGHT
+    # middle_y = (y1 + y2) / 2.0
+    # # if middle_y >= image_height / 2.0:
+    # #     score = score * LOWER_HALF_LINE_WEIGHT
+    # if middle_y < image_height / 2.0:
+    #     score = 0.0;
+    center_x = (x1 + x2) / 2.0
+    if (center_x >= image_width / 4.0) and (center_x <= image_width * 3.0 / 4.0):
+        score = score * (1.0 + (1.0 - abs(center_x - image_width / 2.0) / (image_width / 2.0)))
+    if y2 < y1:
+        y1, y2 = y2, y1
+    if y1 < image_height / 2.0:
+        score = 0.0
     return score
 
 

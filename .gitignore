@@ -1,5 +1,6 @@
 *.mp4
 .env
+.venv
 __pycache__
 .vscode
 *tmp*

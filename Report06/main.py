@@ -1,468 +1,557 @@
-# 이 프로그램의 전체 흐름은 다음과 같다.
-# 1. main.py 상단의 기본 설정, 환경변수, 명령행 인자, form.py 사용자 입력을 읽는다.
-# 2. shape 값은 대소문자를 구분하지 않고 straight 또는 circle만 허용한다.
-# 3. 입력 영상은 카메라 번호, 동영상 파일, 또는 이미지 파일로 열 수 있다.
-# 4. 각 프레임의 RGB 값을 YCbCr 방식으로 변환하고 Y 성분만 추출한다.
-# 5. 추출한 Y 성분에 Gaussian Blur와 Canny Edge Detection을 적용한다.
-# 6. straight 모드에서는 Canny 결과에 Hough Line Detection을 적용한다.
-# 7. 직선 검출 모드에서는 차선 후보 각도와 하단 영역 필터를 켜거나 끌 수 있다.
-# 8. circle 모드에서는 Y 성분에 Hough Circle Detection을 적용한다.
-# 9. 원 검출 모드에서는 원형 에지 일치도 또는 우측 상단 우선 옵션으로 최종 원을 고른다.
-# 10. ui.py는 Windows, WSL, Debian/Linux 환경에 맞게 창 표시 또는 파일 저장을 수행한다.
+"""
+main.py
+YCbCr의 Y 성분에 Canny를 적용하고 Hough Transform으로 직선 또는 원을 검출한다.
 
-from __future__ import annotations
+어려운 문법을 줄이기 위해 타입 힌트, dataclass, 데코레이터를 사용하지 않는다.
+"""
 
 import math
 import sys
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Union
 
 import cv2
 import numpy as np
 
-from form import ConfigDefaults, RuntimeConfig, UserInputForm
+from form import ConfigDefaults, UserInputForm
 from ui import EnvironmentInfo, ResultDisplayManager, draw_label
 
 
-# ==============================
-# main.py 기본 설정 영역
-# ==============================
-# shape 환경변수 또는 --shape 인자가 없을 때 사용하는 기본 검출 모드이다.
-shape = "straight"
-
-# 입력 소스 기본값이다. "0"은 카메라 0번이며, 동영상/이미지 경로로 바꿀 수 있다.
-INPUT_SOURCE = "0"
-
-# 직선 모드에서 차선형 각도/하단 영역 필터를 적용할지 결정한다.
-LANE_FILTER_ENABLED = True
-
-# 원 모드에서 원형 정확도 외에 우측 상단 위치를 우선할지 결정한다.
-CIRCLE_TOP_RIGHT_PRIORITY_ENABLED = False
-
-# 처리할 최대 프레임 수이다. 0이면 제한 없음이다.
-MAX_FRAMES = 0
-
-# 결과 이미지와 동영상을 저장할 폴더이다.
+# ============================================================
+# 기본 설정 영역
+# 개발자가 자주 바꿀 값은 이곳에 모아 둔다.
+# ============================================================
+DEFAULT_MODE = "straight"                 # "straight" 또는 "circle"
+DEFAULT_INPUT_TYPE = "file"               # "file" 또는 "webcam"
+INPUT_SOURCE = "test_video.mp4"           # 기본 입력 파일
+WEBCAM_SOURCE = "0"                       # 웹캠 기본 번호
 OUTPUT_DIR = "output"
 
+TOP_STRAIGHT_LINES = 10                   # 표시할 상위 직선 개수
+TOP_CIRCLES = 3                           # 표시할 상위 원 개수
+LOWER_HALF_LINE_WEIGHT = 1.5              # 화면 아래쪽 직선에 주는 점수 가중치
 
-def is_camera_source(source_text: str) -> bool:
-    """입력 소스 문자열이 카메라 번호인지 판단한다."""
-    return source_text.strip().isdigit()
+LANE_FILTER_ENABLED = True                # 차선 각도 필터 사용 여부
+CIRCLE_TOP_RIGHT_PRIORITY_ENABLED = False # 원 검출에서 우측 상단 우선 여부
+MAX_FRAMES = 0                            # 0이면 끝까지 처리
 
+# Canny 설정
+CANNY_LOW_THRESHOLD = 80
+CANNY_HIGH_THRESHOLD = 160
+GAUSSIAN_KERNEL_SIZE = (5, 5)
 
-def compute_ycbcr_y(bgr_frame: np.ndarray) -> np.ndarray:
-    """BGR 프레임을 RGB로 바꾼 뒤 YCbCr의 Y 밝기 성분만 계산한다."""
-    rgb_frame = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB).astype(np.float32)
-    red_channel = rgb_frame[:, :, 0]
-    green_channel = rgb_frame[:, :, 1]
-    blue_channel = rgb_frame[:, :, 2]
+# Hough Line 설정
+LINE_RHO = 1.0
+LINE_THETA = math.pi / 180.0
+LINE_THRESHOLD = 60
+LINE_MIN_LENGTH = 60
+LINE_MAX_GAP = 20
+LANE_MIN_ABS_ANGLE = 20.0
+LANE_MAX_ABS_ANGLE = 75.0
 
-    # YCbCr의 Y 공식이다. 색차 성분 Cb, Cr은 과제 조건에 따라 사용하지 않는다.
-    y_channel = 0.299 * red_channel + 0.587 * green_channel + 0.114 * blue_channel
-    return np.clip(y_channel, 0, 255).astype(np.uint8)
+# Hough Circle 설정
+CIRCLE_DP = 1.2
+CIRCLE_MIN_DIST_RATIO = 0.08
+CIRCLE_PARAM1 = 120
+CIRCLE_PARAM2 = 30
+CIRCLE_MIN_RADIUS = 8
+CIRCLE_MAX_RADIUS = 0
+CIRCLE_SAMPLE_COUNT = 180
+CIRCLE_EDGE_PROBE_RADIUS = 2
+CIRCLE_TOP_RIGHT_WEIGHT = 0.35
 
+# 출력 설정
+WAIT_DELAY_MS = 1
+SAVE_EVERY_N_FRAMES = 30
+HEADLESS_WEBCAM_FRAME_LIMIT = 120
 
-def detect_canny_edges(y_channel: np.ndarray, low_threshold: int, high_threshold: int) -> np.ndarray:
-    """Y 성분 영상에 Gaussian Blur와 Canny Edge Detection을 적용한다."""
-    blurred_y = cv2.GaussianBlur(y_channel, (5, 5), 0)
-    return cv2.Canny(blurred_y, low_threshold, high_threshold)
-
-
-def line_angle_degrees(x1: int, y1: int, x2: int, y2: int) -> float:
-    """직선 성분의 각도를 도 단위로 계산한다."""
-    return math.degrees(math.atan2(y2 - y1, x2 - x1))
-
-
-def is_lane_like_line(
-    x1: int,
-    y1: int,
-    x2: int,
-    y2: int,
-    frame_shape: tuple[int, int, int],
-    config: RuntimeConfig,
-) -> bool:
-    """직선 성분이 차선처럼 보이는 각도와 위치를 가지는지 판정한다."""
-    angle = line_angle_degrees(x1, y1, x2, y2)
-    abs_angle = abs(angle)
-    midpoint_y = (y1 + y2) / 2.0
-    image_height = frame_shape[0]
-
-    # 차선은 보통 영상 하단부에 있고, 수평/수직보다 대각선 성분에 가깝다.
-    angle_is_lane_like = config.lane_min_abs_angle <= abs_angle <= config.lane_max_abs_angle
-    midpoint_is_low_enough = midpoint_y >= image_height * config.lane_min_y_ratio
-    return angle_is_lane_like and midpoint_is_low_enough
+IMAGE_EXTENSIONS = [".bmp", ".dib", ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"]
 
 
-def upper_right_score(x: int, y: int, frame_shape: tuple[int, int, int]) -> float:
-    """점이 영상의 우측 상단에 가까울수록 높은 점수를 반환한다."""
-    image_height, image_width = frame_shape[:2]
-    distance = math.hypot(image_width - x, y)
-    max_distance = math.hypot(image_width, image_height)
-    return max(0.0, 1.0 - distance / max_distance)
+class LineCandidate:
+    """검출된 직선 후보를 저장하는 클래스이다."""
+
+    def __init__(self, x1, y1, x2, y2, score):
+        """직선의 양 끝점과 점수를 저장한다."""
+        self.x1 = x1
+        self.y1 = y1
+        self.x2 = x2
+        self.y2 = y2
+        self.score = score
+
+    def start(self):
+        """직선의 시작 좌표를 반환한다."""
+        return self.x1, self.y1
+
+    def end(self):
+        """직선의 끝 좌표를 반환한다."""
+        return self.x2, self.y2
 
 
-def make_default_config() -> ConfigDefaults:
-    """main.py 상단 설정값을 ConfigDefaults 객체로 묶어 반환한다."""
-    return ConfigDefaults(
-        shape=shape,
-        input_source=INPUT_SOURCE,
-        output_dir=OUTPUT_DIR,
-        lane_filter_enabled=LANE_FILTER_ENABLED,
-        circle_top_right_priority_enabled=CIRCLE_TOP_RIGHT_PRIORITY_ENABLED,
-        max_frames=MAX_FRAMES,
-    )
-
-
-class FrameSource:
-    """카메라, 동영상 파일, 이미지 파일에서 프레임을 하나씩 제공하는 클래스이다."""
-
-    IMAGE_EXTENSIONS = {".bmp", ".dib", ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"}
-
-    def __init__(self, source_text: str) -> None:
-        """입력 소스 문자열을 저장하고 내부 상태를 초기화한다."""
-        self.source_text = source_text
-        self.capture: Optional[cv2.VideoCapture] = None
-        self.single_image: Optional[np.ndarray] = None
-        self.single_image_already_read = False
-        self.is_camera = is_camera_source(source_text)
-
-    def open(self) -> None:
-        """입력 소스를 열고 실패하면 RuntimeError를 발생시킨다."""
-        source_path = Path(self.source_text)
-        if source_path.exists() and source_path.suffix.lower() in self.IMAGE_EXTENSIONS:
-            self.single_image = cv2.imread(str(source_path), cv2.IMREAD_COLOR)
-            if self.single_image is None:
-                raise RuntimeError(f"ERROR: image file could not be read: {source_path}")
-            return
-
-        capture_source: Union[int, str] = int(self.source_text) if self.is_camera else self.source_text
-        self.capture = cv2.VideoCapture(capture_source)
-        if not self.capture.isOpened():
-            raise RuntimeError(f"ERROR: video source could not be opened: {self.source_text}")
-
-    def read(self) -> tuple[bool, Optional[np.ndarray]]:
-        """다음 프레임을 읽고 성공 여부와 프레임을 반환한다."""
-        if self.single_image is not None:
-            if self.single_image_already_read:
-                return False, None
-            self.single_image_already_read = True
-            return True, self.single_image.copy()
-
-        if self.capture is None:
-            return False, None
-        success, frame = self.capture.read()
-        return success, frame if success else None
-
-    def fps(self) -> float:
-        """입력 FPS를 반환하고, 알 수 없으면 30 FPS를 기본값으로 사용한다."""
-        if self.capture is None:
-            return 30.0
-        fps_value = float(self.capture.get(cv2.CAP_PROP_FPS))
-        if fps_value <= 1.0 or math.isnan(fps_value):
-            return 30.0
-        return fps_value
-
-    def release(self) -> None:
-        """OpenCV 캡처 객체가 존재하면 해제한다."""
-        if self.capture is not None:
-            self.capture.release()
-
-
-class YCbCrYExtractor:
-    """YCbCr 색상 모델의 Y 밝기 성분만 추출하는 클래스이다."""
-
-    def extract(self, bgr_frame: np.ndarray) -> np.ndarray:
-        """BGR 프레임에서 YCbCr의 Y 성분을 추출한다."""
-        return compute_ycbcr_y(bgr_frame)
-
-
-class CannyEdgeDetector:
-    """Y 성분 영상에 Canny Edge Detection을 적용하는 클래스이다."""
-
-    def __init__(self, config: RuntimeConfig) -> None:
-        """Canny 임계값을 설정 객체에서 가져온다."""
-        self.low_threshold = config.canny_low_threshold
-        self.high_threshold = config.canny_high_threshold
-
-    def detect(self, y_channel: np.ndarray) -> np.ndarray:
-        """Y 성분 영상에서 이진 에지 영상을 생성한다."""
-        return detect_canny_edges(y_channel, self.low_threshold, self.high_threshold)
-
-
-class BaseShapeDetector:
-    """직선 검출기와 원 검출기가 공유하는 공통 인터페이스이다."""
-
-    def detect_and_draw(self, bgr_frame: np.ndarray, y_channel: np.ndarray, edges: np.ndarray) -> np.ndarray:
-        """도형을 검출하고 원본 프레임 복사본 위에 결과를 그린다."""
-        raise NotImplementedError("자식 클래스에서 detect_and_draw를 구현해야 한다.")
-
-
-class HoughLineDetector(BaseShapeDetector):
-    """확률적 Hough Line Transform으로 직선 성분을 검출하는 클래스이다."""
-
-    def __init__(self, config: RuntimeConfig) -> None:
-        """Hough 직선 파라미터와 차선 필터 설정을 저장한다."""
-        self.config = config
-
-    def detect_and_draw(self, bgr_frame: np.ndarray, y_channel: np.ndarray, edges: np.ndarray) -> np.ndarray:
-        """Canny 에지 영상에서 직선을 찾고 원본 프레임 위에 겹쳐 그린다."""
-        output_frame = bgr_frame.copy()
-        lines = cv2.HoughLinesP(
-            edges,
-            rho=self.config.line_rho,
-            theta=self.config.line_theta,
-            threshold=self.config.line_threshold,
-            minLineLength=self.config.line_min_length,
-            maxLineGap=self.config.line_max_gap,
-        )
-
-        kept_count = 0
-        if lines is not None:
-            for line in lines:
-                x1, y1, x2, y2 = line[0]
-                if not self._keep_line(x1, y1, x2, y2, bgr_frame.shape):
-                    continue
-                kept_count += 1
-                cv2.line(output_frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
-
-        filter_text = "ON" if self.config.lane_filter_enabled else "OFF"
-        draw_label(output_frame, f"Hough Line Detection | lane filter: {filter_text} | lines: {kept_count}")
-        return output_frame
-
-    def _keep_line(self, x1: int, y1: int, x2: int, y2: int, frame_shape: tuple[int, int, int]) -> bool:
-        """차선 필터 설정에 따라 직선 유지 여부를 결정한다."""
-        if not self.config.lane_filter_enabled:
-            return True
-        return is_lane_like_line(x1, y1, x2, y2, frame_shape, self.config)
-
-
-@dataclass(frozen=True)
 class CircleCandidate:
-    """검출된 원의 중심, 반지름, 평가 점수를 저장하는 데이터 클래스이다."""
+    """검출된 원 후보를 저장하는 클래스이다."""
 
-    x: int
-    y: int
-    radius: int
-    support_score: float = 0.0
-    ranking_score: float = 0.0
+    def __init__(self, x, y, radius, score):
+        """원의 중심, 반지름, 점수를 저장한다."""
+        self.x = x
+        self.y = y
+        self.radius = radius
+        self.score = score
 
-    def center(self) -> tuple[int, int]:
-        """원의 중심 좌표를 (x, y) 튜플로 반환한다."""
+    def center(self):
+        """원의 중심 좌표를 반환한다."""
         return self.x, self.y
 
 
-class HoughCircleDetector(BaseShapeDetector):
-    """Hough Circle Transform으로 원을 검출하고 최적 후보를 선택하는 클래스이다."""
+class FrameSource:
+    """이미지, 동영상 파일, 웹캠에서 프레임을 읽는 클래스이다."""
 
-    def __init__(self, config: RuntimeConfig) -> None:
-        """Hough 원 파라미터와 원 후보 선택 옵션을 저장한다."""
+    def __init__(self, input_type, source):
+        """입력 종류와 입력 소스를 저장한다."""
+        self.input_type = input_type
+        self.source = source
+        self.capture = None
+        self.image = None
+        self.image_was_read = False
+
+    def is_webcam(self):
+        """입력이 웹캠이면 True를 반환한다."""
+        return self.input_type == "webcam"
+
+    def open(self):
+        """입력 소스를 연다."""
+        if self.is_webcam():
+            self.open_webcam()
+        else:
+            self.open_file()
+
+    def read(self):
+        """다음 프레임을 읽는다."""
+        if self.image is not None:
+            if self.image_was_read:
+                return False, None
+            self.image_was_read = True
+            return True, self.image.copy()
+
+        if self.capture is None:
+            return False, None
+
+        ok, frame = self.capture.read()
+        if ok:
+            return True, frame
+        return False, None
+
+    def fps(self):
+        """영상 FPS를 반환한다. 알 수 없으면 30을 반환한다."""
+        if self.capture is None:
+            return 30.0
+
+        fps = float(self.capture.get(cv2.CAP_PROP_FPS))
+        if fps > 1.0 and not math.isnan(fps):
+            return fps
+        return 30.0
+
+    def release(self):
+        """입력 자원을 정리한다."""
+        if self.capture is not None:
+            self.capture.release()
+
+    def open_webcam(self):
+        """웹캠 번호를 이용해 카메라를 연다."""
+        if not self.source.isdigit():
+            raise RuntimeError("ERROR: webcam source must be a camera number, for example 0.")
+
+        self.capture = cv2.VideoCapture(int(self.source))
+        if not self.capture.isOpened():
+            raise RuntimeError("ERROR: webcam could not be opened: " + self.source)
+
+    def open_file(self):
+        """이미지 또는 동영상 파일을 연다."""
+        path = Path(self.source)
+        if not path.exists():
+            raise RuntimeError("ERROR: input file does not exist: " + str(path))
+
+        if path.suffix.lower() in IMAGE_EXTENSIONS:
+            self.image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+            if self.image is None:
+                raise RuntimeError("ERROR: image file could not be read: " + str(path))
+            return
+
+        self.capture = cv2.VideoCapture(str(path))
+        if not self.capture.isOpened():
+            raise RuntimeError("ERROR: video file could not be opened: " + str(path))
+
+
+def make_default_config():
+    """main.py 위쪽의 기본 설정값을 ConfigDefaults 객체로 만든다."""
+    return ConfigDefaults(
+        DEFAULT_MODE,
+        DEFAULT_INPUT_TYPE,
+        INPUT_SOURCE,
+        WEBCAM_SOURCE,
+        OUTPUT_DIR,
+        LANE_FILTER_ENABLED,
+        CIRCLE_TOP_RIGHT_PRIORITY_ENABLED,
+        MAX_FRAMES,
+        WAIT_DELAY_MS,
+        SAVE_EVERY_N_FRAMES,
+    )
+
+
+def extract_y_channel(bgr_frame):
+    """BGR 영상을 YCrCb로 바꾸고 Y 밝기 성분만 꺼낸다."""
+    ycrcb_frame = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2YCrCb)
+    return ycrcb_frame[:, :, 0]
+
+
+def detect_edges(y_channel):
+    """Y 성분 영상에 Blur와 Canny Edge Detection을 적용한다."""
+    blurred = cv2.GaussianBlur(y_channel, GAUSSIAN_KERNEL_SIZE, 0)
+    edges = cv2.Canny(blurred, CANNY_LOW_THRESHOLD, CANNY_HIGH_THRESHOLD)
+    return edges
+
+
+def line_length(x1, y1, x2, y2):
+    """직선의 길이를 계산한다."""
+    return math.hypot(x2 - x1, y2 - y1)
+
+
+def line_abs_angle(x1, y1, x2, y2):
+    """직선 각도를 0도에서 90도 사이 값으로 계산한다."""
+    angle = abs(math.degrees(math.atan2(y2 - y1, x2 - x1)))
+    if angle > 90.0:
+        angle = 180.0 - angle
+    return angle
+
+
+def is_lane_angle(x1, y1, x2, y2):
+    """직선 각도가 차선처럼 보이는 대각선 범위인지 확인한다."""
+    angle = line_abs_angle(x1, y1, x2, y2)
+    if angle >= LANE_MIN_ABS_ANGLE and angle <= LANE_MAX_ABS_ANGLE:
+        return True
+    return False
+
+
+def line_mid_y(x1, y1, x2, y2):
+    """직선 중점의 y 좌표를 계산한다."""
+    return (y1 + y2) / 2.0
+
+
+def make_line_candidate(raw_line, image_height, lane_filter_enabled):
+    """HoughLinesP 결과 하나를 LineCandidate 객체로 바꾼다."""
+    x1 = int(raw_line[0])
+    y1 = int(raw_line[1])
+    x2 = int(raw_line[2])
+    y2 = int(raw_line[3])
+
+    if lane_filter_enabled:
+        if not is_lane_angle(x1, y1, x2, y2):
+            return None
+
+    score = line_length(x1, y1, x2, y2)
+    if lane_filter_enabled:
+        if line_mid_y(x1, y1, x2, y2) >= image_height / 2.0:
+            score = score * LOWER_HALF_LINE_WEIGHT
+
+    return LineCandidate(x1, y1, x2, y2, score)
+
+
+def upper_right_score(x, y, frame_shape):
+    """우측 상단에 가까운 원일수록 높은 위치 점수를 준다."""
+    height = frame_shape[0]
+    width = frame_shape[1]
+    distance = math.hypot(width - x, y)
+    max_distance = math.hypot(width, height)
+    score = 1.0 - distance / max_distance
+    if score < 0.0:
+        score = 0.0
+    return score
+
+
+def has_nearby_edge(edges, x, y):
+    """한 좌표 주변에 Canny 에지가 있는지 확인한다."""
+    height = edges.shape[0]
+    width = edges.shape[1]
+    radius = CIRCLE_EDGE_PROBE_RADIUS
+
+    x1 = max(0, x - radius)
+    x2 = min(width, x + radius + 1)
+    y1 = max(0, y - radius)
+    y2 = min(height, y + radius + 1)
+
+    if np.any(edges[y1:y2, x1:x2] > 0):
+        return True
+    return False
+
+
+def circle_support_score(edges, center_x, center_y, radius):
+    """원 둘레 샘플 지점에 에지가 얼마나 많이 있는지 계산한다."""
+    height = edges.shape[0]
+    width = edges.shape[1]
+    hit_count = 0
+    sample_count = 0
+
+    angles = np.linspace(0.0, 2.0 * math.pi, CIRCLE_SAMPLE_COUNT, endpoint=False)
+    for angle in angles:
+        x = int(round(center_x + radius * math.cos(angle)))
+        y = int(round(center_y + radius * math.sin(angle)))
+
+        if x >= 0 and x < width and y >= 0 and y < height:
+            sample_count = sample_count + 1
+            if has_nearby_edge(edges, x, y):
+                hit_count = hit_count + 1
+
+    if sample_count == 0:
+        return 0.0
+    return hit_count / sample_count
+
+
+def make_circle_candidate(x, y, radius, edges, frame_shape, config):
+    """HoughCircles 결과 하나를 CircleCandidate 객체로 바꾼다."""
+    support = circle_support_score(edges, x, y, radius)
+    score = support
+
+    if config.circle_top_right_priority_enabled:
+        position = upper_right_score(x, y, frame_shape)
+        score = (1.0 - CIRCLE_TOP_RIGHT_WEIGHT) * support + CIRCLE_TOP_RIGHT_WEIGHT * position
+
+    return CircleCandidate(x, y, radius, score)
+
+
+class HoughLineDetector:
+    """Canny 에지 영상에서 Hough 직선을 찾는 클래스이다."""
+
+    def __init__(self, config):
+        """직선 검출에 필요한 설정을 저장한다."""
         self.config = config
 
-    def detect_and_draw(self, bgr_frame: np.ndarray, y_channel: np.ndarray, edges: np.ndarray) -> np.ndarray:
-        """Y 성분 영상에서 원 후보를 찾고 가장 좋은 원을 원본 프레임에 표시한다."""
-        output_frame = bgr_frame.copy()
-        candidates = self._detect_candidates(y_channel, edges, bgr_frame.shape)
+    def detect(self, edges, frame_shape):
+        """점수가 높은 직선 후보들을 찾는다."""
+        raw_lines = cv2.HoughLinesP(
+            edges,
+            rho=LINE_RHO,
+            theta=LINE_THETA,
+            threshold=LINE_THRESHOLD,
+            minLineLength=LINE_MIN_LENGTH,
+            maxLineGap=LINE_MAX_GAP,
+        )
 
-        if candidates:
-            best_circle = max(candidates, key=lambda candidate: candidate.ranking_score)
-            cv2.circle(output_frame, best_circle.center(), best_circle.radius, (0, 255, 0), 3)
-            cv2.circle(output_frame, best_circle.center(), 3, (0, 0, 255), -1)
-            score_text = f"support: {best_circle.support_score:.2f}, rank: {best_circle.ranking_score:.2f}"
+        if raw_lines is None:
+            return []
+
+        image_height = frame_shape[0]
+        candidates = []
+        for raw_line in raw_lines:
+            line_data = raw_line[0]
+            candidate = make_line_candidate(line_data, image_height, self.config.lane_filter_enabled)
+            if candidate is not None:
+                candidates.append(candidate)
+
+        candidates.sort(key=line_score, reverse=True)
+        return candidates[:TOP_STRAIGHT_LINES]
+
+    def draw(self, frame, lines):
+        """선택된 직선을 프레임 위에 그린다."""
+        output = frame.copy()
+
+        rank = 1
+        for line in lines:
+            cv2.line(output, line.start(), line.end(), (0, 0, 255), 3)
             cv2.putText(
-                output_frame,
-                score_text,
-                (best_circle.x + 10, best_circle.y),
+                output,
+                "#" + str(rank) + " " + str(round(line.score)),
+                line.start(),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.65,
-                (0, 255, 0),
+                0.55,
+                (0, 0, 255),
                 2,
             )
+            rank = rank + 1
 
-        priority_text = "upper-right" if self.config.circle_top_right_priority_enabled else "roundness"
-        draw_label(output_frame, f"Hough Circle Detection | priority: {priority_text} | candidates: {len(candidates)}")
-        return output_frame
+        if self.config.lane_filter_enabled:
+            lane_text = "ON"
+        else:
+            lane_text = "OFF"
 
-    def _detect_candidates(
-        self,
-        y_channel: np.ndarray,
-        edges: np.ndarray,
-        frame_shape: tuple[int, int, int],
-    ) -> list[CircleCandidate]:
-        """HoughCircles 결과를 CircleCandidate 목록으로 변환하고 점수를 계산한다."""
-        image_height, image_width = frame_shape[:2]
-        min_distance = max(10, int(min(image_height, image_width) * self.config.circle_min_dist_ratio))
-        blurred_y = cv2.medianBlur(y_channel, 5)
+        label = "Top " + str(len(lines)) + "/" + str(TOP_STRAIGHT_LINES) + " Lines | lane filter: " + lane_text
+        draw_label(output, label)
+        return output
+
+
+class HoughCircleDetector:
+    """밝기 영상과 Canny 에지 영상에서 Hough 원을 찾는 클래스이다."""
+
+    def __init__(self, config):
+        """원 검출에 필요한 설정을 저장한다."""
+        self.config = config
+
+    def detect(self, y_channel, edges, frame_shape):
+        """점수가 높은 원 후보들을 찾는다."""
+        height = frame_shape[0]
+        width = frame_shape[1]
+        min_distance = max(10, int(min(height, width) * CIRCLE_MIN_DIST_RATIO))
+        blurred = cv2.medianBlur(y_channel, 5)
+
         raw_circles = cv2.HoughCircles(
-            blurred_y,
+            blurred,
             cv2.HOUGH_GRADIENT,
-            dp=self.config.circle_dp,
+            dp=CIRCLE_DP,
             minDist=min_distance,
-            param1=self.config.circle_param1,
-            param2=self.config.circle_param2,
-            minRadius=self.config.circle_min_radius,
-            maxRadius=self.config.circle_max_radius,
+            param1=CIRCLE_PARAM1,
+            param2=CIRCLE_PARAM2,
+            minRadius=CIRCLE_MIN_RADIUS,
+            maxRadius=CIRCLE_MAX_RADIUS,
         )
 
         if raw_circles is None:
             return []
 
-        circles = np.round(raw_circles[0, :]).astype(int)
-        return [self._make_candidate(int(x), int(y), int(radius), edges, frame_shape) for x, y, radius in circles if radius > 0]
+        rounded = np.round(raw_circles[0]).astype(int)
+        candidates = []
+        for circle in rounded:
+            x = int(circle[0])
+            y = int(circle[1])
+            radius = int(circle[2])
+            if radius > 0:
+                candidate = make_circle_candidate(x, y, radius, edges, frame_shape, self.config)
+                candidates.append(candidate)
 
-    def _make_candidate(
-        self,
-        x: int,
-        y: int,
-        radius: int,
-        edges: np.ndarray,
-        frame_shape: tuple[int, int, int],
-    ) -> CircleCandidate:
-        """검출 원 하나에 대해 에지 지지도와 최종 순위 점수를 계산한다."""
-        support_score = self._edge_support_score(x, y, radius, edges)
-        ranking_score = self._ranking_score(x, y, support_score, frame_shape)
-        return CircleCandidate(x=x, y=y, radius=radius, support_score=support_score, ranking_score=ranking_score)
+        candidates.sort(key=circle_score, reverse=True)
+        return candidates[:TOP_CIRCLES]
 
-    def _edge_support_score(self, center_x: int, center_y: int, radius: int, edges: np.ndarray) -> float:
-        """원 둘레 샘플 지점 주변에 Canny 에지가 존재하는 비율을 계산한다."""
-        image_height, image_width = edges.shape[:2]
-        angles = np.linspace(0.0, 2.0 * math.pi, self.config.circle_sample_count, endpoint=False)
-        xs = np.rint(center_x + radius * np.cos(angles)).astype(int)
-        ys = np.rint(center_y + radius * np.sin(angles)).astype(int)
+    def draw(self, frame, circles):
+        """선택된 원을 프레임 위에 그린다."""
+        output = frame.copy()
 
-        valid_mask = (xs >= 0) & (xs < image_width) & (ys >= 0) & (ys < image_height)
-        valid_xs = xs[valid_mask]
-        valid_ys = ys[valid_mask]
-        if len(valid_xs) == 0:
-            return 0.0
+        rank = 1
+        for circle in circles:
+            cv2.circle(output, circle.center(), circle.radius, (0, 255, 0), 3)
+            cv2.circle(output, circle.center(), 3, (0, 0, 255), -1)
+            cv2.putText(
+                output,
+                "#" + str(rank) + " " + str(round(circle.score, 2)),
+                (circle.x + 10, circle.y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (0, 255, 0),
+                2,
+            )
+            rank = rank + 1
 
-        supported_count = sum(
-            1
-            for x, y in zip(valid_xs, valid_ys)
-            if self._has_nearby_edge(int(x), int(y), edges)
-        )
-        return supported_count / float(len(valid_xs))
+        if self.config.circle_top_right_priority_enabled:
+            score_text = "upper-right"
+        else:
+            score_text = "edge support"
 
-    def _has_nearby_edge(self, x: int, y: int, edges: np.ndarray) -> bool:
-        """샘플 지점 주변 작은 영역에 에지 픽셀이 있는지 검사한다."""
-        image_height, image_width = edges.shape[:2]
-        probe_radius = self.config.circle_edge_probe_radius
-        x_start = max(0, x - probe_radius)
-        x_end = min(image_width, x + probe_radius + 1)
-        y_start = max(0, y - probe_radius)
-        y_end = min(image_height, y + probe_radius + 1)
-        return bool(np.any(edges[y_start:y_end, x_start:x_end] > 0))
-
-    def _ranking_score(self, x: int, y: int, support_score: float, frame_shape: tuple[int, int, int]) -> float:
-        """원형 에지 지지도와 선택적인 우측 상단 선호도를 합산한다."""
-        if not self.config.circle_top_right_priority_enabled:
-            return support_score
-        weight = self.config.circle_top_right_weight
-        return (1.0 - weight) * support_score + weight * upper_right_score(x, y, frame_shape)
+        label = "Top " + str(len(circles)) + "/" + str(TOP_CIRCLES) + " Circles | score: " + score_text
+        draw_label(output, label)
+        return output
 
 
-class ShapeDetectorFactory:
-    """선택된 shape 모드에 맞는 검출기 객체를 생성하는 팩토리 클래스이다."""
+def line_score(line):
+    """직선 후보 정렬에 사용할 점수를 반환한다."""
+    return line.score
 
-    @staticmethod
-    def create(config: RuntimeConfig) -> BaseShapeDetector:
-        """straight이면 직선 검출기, circle이면 원 검출기를 반환한다."""
-        if config.mode == "straight":
-            return HoughLineDetector(config)
-        if config.mode == "circle":
-            return HoughCircleDetector(config)
-        raise ValueError(f"Unsupported mode: {config.mode}")
+
+def circle_score(circle):
+    """원 후보 정렬에 사용할 점수를 반환한다."""
+    return circle.score
+
+
+def process_frame(frame, config):
+    """프레임 하나를 처리해 Canny 결과와 검출 결과를 반환한다."""
+    y_channel = extract_y_channel(frame)
+    edges = detect_edges(y_channel)
+
+    if config.mode == "straight":
+        detector = HoughLineDetector(config)
+        lines = detector.detect(edges, frame.shape)
+        overlay = detector.draw(frame, lines)
+    else:
+        detector = HoughCircleDetector(config)
+        circles = detector.detect(y_channel, edges, frame.shape)
+        overlay = detector.draw(frame, circles)
+
+    return edges, overlay
 
 
 class ShapeDetectionApplication:
-    """프레임 읽기, Y 추출, Canny, Hough 검출, UI 출력을 조율하는 응용 클래스이다."""
+    """입력, 처리, 출력을 순서대로 실행하는 클래스이다."""
 
-    def __init__(self, config: RuntimeConfig, environment: EnvironmentInfo) -> None:
-        """실행에 필요한 소스, 전처리기, 검출기 객체를 생성한다."""
+    def __init__(self, config, environment):
+        """설정과 환경 정보를 저장하고 입력 객체를 만든다."""
         self.config = config
         self.environment = environment
-        self.source = FrameSource(config.input_source)
-        self.y_extractor = YCbCrYExtractor()
-        self.edge_detector = CannyEdgeDetector(config)
-        self.shape_detector = ShapeDetectorFactory.create(config)
+        self.source = FrameSource(config.input_type, config.input_source)
 
-    def run(self) -> None:
-        """입력 영상이 끝나거나 사용자가 종료할 때까지 전체 처리 루프를 실행한다."""
+    def run(self):
+        """프레임을 반복해서 읽고 처리한다."""
         self.source.open()
-        display_manager = ResultDisplayManager(self.config, self.environment, self.source.fps())
-        effective_max_frames = self._effective_max_frames()
-
-        self._print_start_message()
+        display = ResultDisplayManager(self.config, self.environment, self.source.fps())
+        max_frames = self.effective_max_frames()
         frame_index = 0
+
+        self.print_start_message()
         try:
             while True:
-                success, frame = self.source.read()
-                if not success or frame is None:
+                ok, frame = self.source.read()
+                if not ok:
+                    break
+                if frame is None:
                     break
 
-                y_channel = self.y_extractor.extract(frame)
-                edges = self.edge_detector.detect(y_channel)
-                overlay_frame = self.shape_detector.detect_and_draw(frame, y_channel, edges)
+                edges, overlay = process_frame(frame, self.config)
+                should_continue = display.handle_frame(edges, overlay, frame_index)
 
-                should_continue = display_manager.handle_frame(edges, overlay_frame, frame_index)
-                frame_index += 1
+                frame_index = frame_index + 1
                 if not should_continue:
                     break
-                if effective_max_frames > 0 and frame_index >= effective_max_frames:
-                    print(f"INFO: reached max frame limit: {effective_max_frames}")
+                if max_frames > 0 and frame_index >= max_frames:
+                    print("INFO: reached max frame limit: " + str(max_frames))
                     break
         finally:
-            display_manager.close()
+            display.close()
             self.source.release()
 
-        self._print_finish_message(display_manager, frame_index)
+        self.print_finish_message(display, frame_index)
 
-    def _effective_max_frames(self) -> int:
-        """GUI가 없는 웹캠 실행에서 무한 루프를 피하기 위한 실제 프레임 제한을 계산한다."""
+    def effective_max_frames(self):
+        """실제로 사용할 최대 프레임 수를 정한다."""
         if self.config.max_frames > 0:
             return self.config.max_frames
-        if self.source.is_camera and not self.environment.can_show_opencv_window():
-            return 120
+        if self.source.is_webcam() and not self.environment.can_show_opencv_window():
+            return HEADLESS_WEBCAM_FRAME_LIMIT
         return 0
 
-    def _print_start_message(self) -> None:
-        """프로그램 시작 시 주요 설정을 로그로 출력한다."""
-        print(f"INFO: mode = {self.config.mode}")
-        print(f"INFO: input source = {self.config.input_source}")
-        print(f"INFO: environment = {self.environment.label()}")
-        print(f"INFO: lane filter = {self.config.lane_filter_enabled}")
-        print(f"INFO: circle upper-right priority = {self.config.circle_top_right_priority_enabled}")
+    def print_start_message(self):
+        """프로그램 시작 정보를 출력한다."""
+        print("INFO: mode = " + self.config.mode)
+        print("INFO: input type = " + self.config.input_type)
+        print("INFO: input source = " + self.config.input_source)
+        print("INFO: environment = " + self.environment.label())
 
-    @staticmethod
-    def _print_finish_message(display_manager: ResultDisplayManager, processed_frames: int) -> None:
-        """처리 완료 후 결과 파일 경로와 처리 프레임 수를 출력한다."""
-        print(f"DONE: processed frames = {processed_frames}")
-        if display_manager.last_image_path is not None:
-            print(f"DONE: last result image = {display_manager.last_image_path}")
-        if display_manager.video_path is not None:
-            print(f"DONE: result video = {display_manager.video_path}")
+    def print_finish_message(self, display, processed_frames):
+        """프로그램 종료 정보를 출력한다."""
+        print("DONE: processed frames = " + str(processed_frames))
+        if display.last_image_path is not None:
+            print("DONE: last result image = " + str(display.last_image_path))
+        if display.video_path is not None:
+            print("DONE: result video = " + str(display.video_path))
 
 
-def build_config(argv: Optional[list[str]] = None) -> RuntimeConfig:
-    """form.py의 UserInputForm을 사용하여 최종 RuntimeConfig를 생성한다."""
-    return UserInputForm(make_default_config(), argv=argv).collect_config()
+def build_config(argv=None):
+    """form.py의 UserInputForm을 사용해 실행 설정을 만든다."""
+    form = UserInputForm(make_default_config(), argv)
+    return form.collect_config()
 
 
-def main(argv: Optional[list[str]] = None) -> None:
-    """설정을 읽고 실행환경을 감지한 뒤 ShapeDetectionApplication을 시작한다."""
+def main(argv=None):
+    """프로그램을 시작하는 함수이다."""
     try:
         config = build_config(argv)
-    except ValueError as error:
-        print(error)
-        sys.exit(1)
-
-    environment = EnvironmentInfo.detect()
-    application = ShapeDetectionApplication(config, environment)
-
-    try:
+        environment = EnvironmentInfo()
+        application = ShapeDetectionApplication(config, environment)
         application.run()
-    except RuntimeError as error:
+    except (ValueError, RuntimeError) as error:
         print(error)
         sys.exit(1)
 

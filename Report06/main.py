@@ -167,7 +167,12 @@ class FrameSource:
     def open_file(self):
         """이미지 또는 동영상 파일을 연다."""
         path = Path(self.source)
-        if not path.exists():
+        
+        if not path.is_absolute(): # 상대 경로인 경우, main.py 기준으로 절대 경로를 만든다
+            base_dir = Path(__file__).resolve().parent
+            path = (base_dir / path).resolve()
+        
+        if not path.exists(): # 경로안에 파일이 없으면 에러 밷는다.vv
             raise RuntimeError("ERROR: input file does not exist: " + str(path))
 
         if path.suffix.lower() in IMAGE_EXTENSIONS:
@@ -194,6 +199,8 @@ def make_default_config():
         MAX_FRAMES,
         WAIT_DELAY_MS,
         SAVE_EVERY_N_FRAMES,
+        TOP_STRAIGHT_LINES,
+        TOP_CIRCLES,
     )
 
 
@@ -347,7 +354,7 @@ class HoughLineDetector:
                 candidates.append(candidate)
 
         candidates.sort(key=line_score, reverse=True)
-        return candidates[:TOP_STRAIGHT_LINES]
+        return candidates[:self.config.top_straight_lines]
 
     def draw(self, frame, lines):
         """선택된 직선을 프레임 위에 그린다."""
@@ -372,7 +379,7 @@ class HoughLineDetector:
         else:
             lane_text = "OFF"
 
-        label = "Top " + str(len(lines)) + "/" + str(TOP_STRAIGHT_LINES) + " Lines | lane filter: " + lane_text
+        label = "Top " + str(len(lines)) + "/" + str(self.config.top_straight_lines) + " Lines | lane filter: " + lane_text
         draw_label(output, label)
         return output
 

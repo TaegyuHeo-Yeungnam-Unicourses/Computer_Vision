@@ -81,10 +81,11 @@ class EnvironmentInfo:
 class ResultDisplayManager:
     """결과 프레임을 저장하고, 가능하면 OpenCV 창에도 보여 준다."""
 
-    def __init__(self, config, environment, fps):
+    def __init__(self, config, environment, fps, display_settings):
         """저장 폴더, 창 이름, 동영상 저장 상태를 준비한다."""
         self.config = config
         self.environment = environment
+        self.display_settings = display_settings
         self.fps = fps
         self.output_dir = config.output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -102,7 +103,7 @@ class ResultDisplayManager:
         self.open_video_writer_if_needed(combined)
         self.write_video(combined)
 
-        if frame_index == 0 or frame_index % self.config.save_every_n_frames == 0:
+        if frame_index == 0 or frame_index % self.display_settings.save_every_n_frames == 0:
             self.last_image_path = self.save_image(combined, frame_index)
             if not self.environment.can_show_opencv_window():
                 print("INFO: result image saved: " + str(self.last_image_path))
@@ -111,7 +112,7 @@ class ResultDisplayManager:
             return True
 
         cv2.imshow(self.window_name, combined)
-        key = cv2.waitKey(self.config.wait_delay_ms) & 0xFF
+        key = cv2.waitKey(self.display_settings.wait_delay_ms) & 0xFF
         if key == ord("q") or key == 27:
             return False
         return True

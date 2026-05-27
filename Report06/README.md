@@ -8,23 +8,25 @@
 
 | 파일 | 역할 |
 |---|---|
-| `main.py` | 주요 조정값, 프레임 입력, Y 성분 추출, Canny, Hough 직선/원 검출을 담당한다. |
+| `main.py` | 프로그램 진입점이다. 설정을 만들고 애플리케이션을 실행한다. |
+| `settings.py` | 기본 실행값, 입력, Canny, Hough, 출력 설정을 객체로 나누어 저장한다. |
 | `form.py` | 명령행 인자와 선택적인 터미널 입력을 읽어 실행 설정 객체를 만든다. |
+| `source.py` | 이미지, 동영상 파일, 웹캠 입력을 같은 방식으로 읽는다. |
+| `pipeline.py` | 프레임 하나를 Y 성분 추출, Canny, 도형 검출 순서로 처리한다. |
+| `detectors.py` | 직선/원 후보 객체, 점수화, Hough 검출, 결과 그리기를 담당한다. |
+| `app.py` | 입력, 처리, 출력을 조립하고 전체 실행 루프를 관리한다. |
 | `ui.py` | Canny 결과와 검출 결과를 좌우로 붙이고, 창 표시 또는 파일 저장을 담당한다. |
 
 ## 2. 중요 설정 위치
 
-개발자가 자주 바꿀 수 있는 값은 `main.py` 상단에 모아 두었다.
+개발자가 자주 바꿀 수 있는 값은 `settings.py`의 설정 객체에 모아 두었다.
 
-- `DEFAULT_MODE`: 기본 검출 모드. `straight` 또는 `circle`
-- `INPUT_SOURCE`: 기본 입력 파일
-- `TOP_STRAIGHT_LINES`: 표시할 상위 직선 개수
-- `TOP_CIRCLES`: 표시할 상위 원 개수
-- `LOWER_HALF_LINE_WEIGHT`: 차선 검출에서 화면 아래쪽 직선에 주는 가중치
-- `LANE_FILTER_ENABLED`: 차선처럼 보이는 각도의 직선만 사용할지 여부
-- `CANNY_LOW_THRESHOLD`, `CANNY_HIGH_THRESHOLD`: Canny 임계값
-- `LINE_THRESHOLD`, `LINE_MIN_LENGTH`, `LINE_MAX_GAP`: Hough 직선 검출 설정
-- `CIRCLE_PARAM1`, `CIRCLE_PARAM2`, `CIRCLE_MIN_RADIUS`: Hough 원 검출 설정
+- `ProgramSettings.defaults`: 기본 검출 모드, 기본 입력 파일, 웹캠 번호, 출력 폴더, 기본 필터 사용 여부
+- `InputSettings`: 상대 입력 경로 기준 폴더, 이미지 확장자, 기본 FPS
+- `EdgeSettings`: Gaussian Blur 커널 크기와 Canny 임계값
+- `LineSettings`: Hough 직선 검출 값, 표시할 직선 개수, 차선 각도 범위, 아래쪽 직선 가중치
+- `CircleSettings`: Hough 원 검출 값, 표시할 원 개수, 원 둘레 에지 지지도 계산 값, 우측 상단 위치 가중치
+- `DisplaySettings`: OpenCV 창 대기 시간, 이미지 저장 주기, headless 웹캠 프레임 제한
 
 ## 3. 실행 방법
 
@@ -79,12 +81,12 @@ python3 main.py --form
 
 ## 5. 처리 흐름
 
-1. `form.py`의 `UserInputForm`이 기본값과 명령행 인자를 합쳐 실행 설정을 만든다.
-2. `main.py`의 `FrameSource`가 이미지, 동영상, 웹캠 중 하나에서 프레임을 읽는다.
-3. `extract_y_channel()`이 BGR 프레임을 YCrCb로 바꾸고 Y 밝기 성분만 가져온다.
-4. `detect_edges()`가 Gaussian Blur와 Canny를 적용한다.
-5. 직선 모드에서는 `HoughLineDetector`가 `cv2.HoughLinesP()` 결과를 점수화해 상위 직선을 그린다.
-6. 원 모드에서는 `HoughCircleDetector`가 `cv2.HoughCircles()` 결과를 에지 지지도 기준으로 점수화해 상위 원을 그린다.
+1. `main.py`가 `ProgramSettings`와 `UserInputForm`으로 실행 설정을 만든다.
+2. `app.py`의 `ShapeDetectionApplication`이 입력, 프레임 처리기, 출력 관리자를 조립한다.
+3. `source.py`의 `FrameSource`가 이미지, 동영상, 웹캠 중 하나에서 프레임을 읽는다.
+4. `pipeline.py`의 `YChannelEdgeDetector`가 BGR 프레임을 YCrCb로 바꾸고 Y 밝기 성분에 Canny를 적용한다.
+5. 직선 모드에서는 `detectors.py`의 `HoughLineDetector`가 `cv2.HoughLinesP()` 결과를 점수화해 상위 직선을 그린다.
+6. 원 모드에서는 `detectors.py`의 `HoughCircleDetector`가 `cv2.HoughCircles()` 결과를 에지 지지도 기준으로 점수화해 상위 원을 그린다.
 7. `ui.py`의 `ResultDisplayManager`가 Canny 영상과 검출 결과를 좌우로 붙여 표시하거나 `output/` 폴더에 저장한다.
 
 ## 6. 코드 작성 기준
@@ -92,6 +94,8 @@ python3 main.py --form
 - 함수 인자에 `value: str` 같은 타입 힌트를 쓰지 않았다.
 - `@dataclass`, `@staticmethod`, `@classmethod`, `@property` 같은 데코레이터를 쓰지 않았다.
 - 설정과 후보 정보는 `__init__`이 있는 기본 클래스에 저장했다.
+- `main.py`에는 값과 처리 로직을 두지 않고 진입점 책임만 남겼다.
+- 입력, 처리, 검출, 출력은 서로 다른 클래스와 파일로 나누었다.
 - 후보 목록을 만들 때 어려운 한 줄 문법 대신 `for`문으로 하나씩 추가했다.
 - 직선 후보와 원 후보는 `score` 값을 기준으로 정렬한다.
 

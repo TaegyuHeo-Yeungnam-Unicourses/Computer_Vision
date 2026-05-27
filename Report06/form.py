@@ -21,8 +21,6 @@ class RuntimeConfig:
         lane_filter_enabled,
         circle_top_right_priority_enabled,
         max_frames,
-        wait_delay_ms,
-        save_every_n_frames,
     ):
         """설정값을 객체 안에 저장한다."""
         self.mode = mode
@@ -32,37 +30,6 @@ class RuntimeConfig:
         self.lane_filter_enabled = lane_filter_enabled
         self.circle_top_right_priority_enabled = circle_top_right_priority_enabled
         self.max_frames = max_frames
-        self.wait_delay_ms = wait_delay_ms
-        self.save_every_n_frames = save_every_n_frames
-
-
-class ConfigDefaults:
-    """main.py 위쪽에 있는 기본 설정값을 저장하는 클래스이다."""
-
-    def __init__(
-        self,
-        mode,
-        input_type,
-        input_source,
-        webcam_source,
-        output_dir,
-        lane_filter_enabled,
-        circle_top_right_priority_enabled,
-        max_frames,
-        wait_delay_ms,
-        save_every_n_frames,
-    ):
-        """기본 설정값을 객체 안에 저장한다."""
-        self.mode = mode
-        self.input_type = input_type
-        self.input_source = input_source
-        self.webcam_source = webcam_source
-        self.output_dir = output_dir
-        self.lane_filter_enabled = lane_filter_enabled
-        self.circle_top_right_priority_enabled = circle_top_right_priority_enabled
-        self.max_frames = max_frames
-        self.wait_delay_ms = wait_delay_ms
-        self.save_every_n_frames = save_every_n_frames
 
 
 def normalize_mode(value):
@@ -200,8 +167,6 @@ class UserInputForm:
             lane_filter_enabled,
             circle_priority_enabled,
             max_frames,
-            self.defaults.wait_delay_ms,
-            self.defaults.save_every_n_frames,
         )
 
     def parse_arguments(self):
@@ -257,16 +222,6 @@ class UserInputForm:
 
 
 if __name__ == "__main__":
-    defaults = ConfigDefaults(
-        "straight",
-        "file",
-        "./test_video.mp4",
-        "0",
-        "output",
-        True,
-        False,
-        0,
-        1,
-        30,
-    )
-    print(UserInputForm(defaults).collect_config())
+    from settings import ProgramSettings
+
+    print(UserInputForm(ProgramSettings().defaults).collect_config())
